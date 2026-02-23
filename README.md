@@ -257,3 +257,14 @@ ng build --prod
 ```
 
 Les fichiers générés sont dans dist/owasp-project/.
+
+
+## 📸 Screenshots
+
+### 🏠 Dashboard
+
+![Dashboard](./dashboard.png)
+
+### 🔍 Requirement Details
+
+![Requirement Details](./details.png)
