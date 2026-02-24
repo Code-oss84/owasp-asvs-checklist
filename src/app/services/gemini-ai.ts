@@ -3,9 +3,8 @@
 import { Injectable, signal, Inject, PLATFORM_ID, inject as angularInject } from '@angular/core';
 import { Observable, from, map, catchError, of } from 'rxjs';
 import { isPlatformBrowser } from '@angular/common';
-import { GoogleGenAI } from '@google/genai';
+import { HttpClient } from '@angular/common/http'; // AJOUTER CET IMPORT
 import { AIExplanation, CodeExample } from '../models/asvs.models';
-import { environment } from '../../environments/environment';
 
 @Injectable({
   providedIn: 'root'
@@ -16,7 +15,10 @@ export class GeminiAiService {
   public error = signal<string | null>(null);
   private platformId = angularInject(PLATFORM_ID);
   private isBrowser = isPlatformBrowser(this.platformId);
-  private genAI: GoogleGenAI | null = null;
+  
+  // AJOUTER CES LIGNES
+  private apiUrl = '/api/gemini'; // URL de votre backend proxy
+  private http = angularInject(HttpClient); // Injecter HttpClient
 
   // Modèles qui fonctionnent avec la version gratuite (février 2025)
   private readonly FREE_MODELS = [
@@ -29,23 +31,16 @@ export class GeminiAiService {
   private readonly MAX_REQUESTS_PER_MINUTE = 60; // Limite gratuite
 
   constructor() {
-    if (this.isBrowser) {
-      try {
-        this.genAI = new GoogleGenAI({ apiKey: environment.geminiApiKey });
-        console.log('GoogleGenAI initialisé avec succès');
-      } catch (error) {
-        console.error('Erreur d\'initialisation GoogleGenAI:', error);
-        this.error.set('Erreur d\'initialisation du client Gemini');
-      }
-    }
+    // PLUS BESOIN d'initialiser GoogleGenAI ici !
+    console.log('GeminiAiService prêt avec proxy backend');
   }
 
   getExplanation(requirement: string, requirementId: string, technology: string): Observable<AIExplanation | null> {
-    if (!this.isBrowser || !this.genAI) {
+    if (!this.isBrowser) {
       return of(this.getDefaultExplanation(requirementId, technology));
     }
 
-    // Vérifier le quota
+    // Vérifier le quota (optionnel, peut être géré côté backend)
     if (!this.checkQuota()) {
       this.error.set('Limite de requêtes atteinte. Veuillez patienter quelques secondes.');
       return of(this.getQuotaExceededExplanation(requirementId, technology));
@@ -62,25 +57,35 @@ export class GeminiAiService {
 
     const prompt = this.buildPrompt(requirement, technology);
     
-    const promise = this.generateContentWithFallback(prompt);
-    
-    return from(promise).pipe(
-      map((text: string) => {
+    // MODIFIER CETTE PARTIE - Utiliser HttpClient au lieu de GoogleGenAI
+    return this.http.post(this.apiUrl, {
+      prompt,
+      model: this.getCurrentModel()
+    }).pipe(
+      map((response: any) => {
+        // Extraire le texte de la réponse
+        let text = '';
+        if (response.candidates && response.candidates[0]?.content?.parts[0]?.text) {
+          text = response.candidates[0].content.parts[0].text;
+        } else if (response.text) {
+          text = response.text;
+        } else {
+          text = JSON.stringify(response);
+        }
+        
         const explanation = this.parseResponse(text, requirementId, technology);
         this.cache.set(cacheKey, explanation);
         this.isLoading.set(false);
         return explanation;
       }),
       catchError(error => {
-        console.error('Erreur GoogleGenAI:', error);
+        console.error('Erreur proxy Gemini:', error);
         
-        let errorMessage = 'Erreur de connexion à Gemini';
-        if (error && typeof error === 'object') {
-          if ('error' in error && error.error && typeof error.error === 'object') {
-            errorMessage = (error.error as any).message || errorMessage;
-          } else if ('message' in error) {
-            errorMessage = (error as any).message;
-          }
+        let errorMessage = 'Erreur de connexion au serveur';
+        if (error.error?.error) {
+          errorMessage = error.error.error;
+        } else if (error.message) {
+          errorMessage = error.message;
         }
         
         this.error.set(errorMessage);
@@ -92,7 +97,6 @@ export class GeminiAiService {
 
   private checkQuota(): boolean {
     const now = Date.now();
-    // Réinitialiser le compteur toutes les minutes
     if (now - this.lastRequestTime > 60000) {
       this.requestCount = 0;
       this.lastRequestTime = now;
@@ -106,55 +110,13 @@ export class GeminiAiService {
     return true;
   }
 
-   private async generateContentWithFallback(prompt: string): Promise<string> {
-  if (!this.genAI) {
-    throw new Error('GoogleGenAI non initialisé');
-  }
-
-  let lastError: Error | null = null;
-
-  for (let i = 0; i < this.FREE_MODELS.length; i++) {
-    const modelName = this.FREE_MODELS[i];
-    
-    try {
-      console.log(`Tentative avec le modèle: ${modelName}`);
-      
-      const response = await this.genAI.models.generateContent({  // <-- L'appel API ici
-        model:  "gemini-3-flash-preview",
-        contents: prompt
-      });
-
-        this.currentModelIndex = i;
-        
-        let text = '';
-        if (typeof response === 'string') {
-          text = response;
-        } else if (response && typeof response === 'object') {
-          text = (response as any).text || 
-                 (response as any).response || 
-                 (response as any).candidates?.[0]?.content?.parts?.[0]?.text ||
-                 JSON.stringify(response);
-        }
-
-        if (text) {
-          console.log(`Succès avec le modèle gratuit: ${modelName}`);
-          return text;
-        }
-      } catch (error: any) {
-        console.warn(`Échec avec le modèle ${modelName}:`, error.message);
-        lastError = error;
-      }
-    }
-
-    // Si tous les modèles échouent, proposer une solution de secours
-    throw lastError || new Error('Aucun modèle gratuit disponible');
-  }
+  // SUPPRIMER la méthode generateContentWithFallback - plus besoin !
+  // Elle est remplacée par l'appel HTTP ci-dessus
 
   private delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
-  // Version simplifiée qui utilise un cache local
   getCachedExplanation(requirementId: string, technology: string): AIExplanation | null {
     const cacheKey = `${requirementId}-${technology}`;
     return this.cache.get(cacheKey) || null;
@@ -189,23 +151,19 @@ Vous avez atteint la limite de 60 requêtes par minute de la version gratuite.
 **Comment résoudre ce problème ?**
 1. ⏱️ Attendez 60 secondes avant de réessayer
 2. 🔄 Utilisez les réponses en cache (certaines explications sont déjà sauvegardées)
-3. 💳 Passez à un compte payant pour plus de requêtes
 
 **Recommandations OWASP pour ${technology} :**
 - Consultez la documentation officielle OWASP
-- Vérifiez les bonnes pratiques de sécurité pour ${technology}
-- Testez manuellement les contrôles de sécurité`,
+- Vérifiez les bonnes pratiques de sécurité pour ${technology}`,
       risks: ['Information temporairement indisponible - limite de quota'],
       implementationSteps: [
         'Attendez 60 secondes et réessayez',
-        'Consultez la documentation OWASP directement',
-        'Utilisez les ressources de la communauté'
+        'Consultez la documentation OWASP directement'
       ],
       codeExamples: [],
       bestPractices: [
         'Planifiez vos validations de sécurité',
-        'Utilisez des outils de scan automatiques',
-        'Documentez vos contrôles de sécurité'
+        'Utilisez des outils de scan automatiques'
       ]
     };
   }
@@ -222,14 +180,12 @@ Vous avez atteint la limite de 60 requêtes par minute de la version gratuite.
       risks: ['Information temporairement indisponible'],
       implementationSteps: [
         'Vérifiez votre connexion internet',
-        'Consultez la documentation OWASP officielle',
-        'Utilisez les ressources de sécurité de votre framework'
+        'Consultez la documentation OWASP officielle'
       ],
       codeExamples: [],
       bestPractices: [
         'Implémentez les contrôles de sécurité recommandés',
-        'Effectuez des revues de code régulières',
-        'Utilisez des outils d\'analyse statique'
+        'Effectuez des revues de code régulières'
       ]
     };
   }
