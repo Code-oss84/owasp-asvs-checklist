@@ -1,20 +1,14 @@
 {
-  "functions": {
-    "api/gemini.js": {
-      "maxDuration": 10
-    }
-  },
-  "rewrites": [
-    { "source": "/api/gemini", "destination": "/api/gemini" }
-  ],
   "builds": [
     {
-      "src": "api/**/*.js",
+      "src": "api/gemini.cjs",
       "use": "@vercel/node"
-    },
+    }
+  ],
+  "rewrites": [
     {
-      "src": "dist/owasp-project/**",
-      "use": "@vercel/static"
+      "source": "/api/gemini",
+      "destination": "/api/gemini.cjs"
     }
   ]
 }

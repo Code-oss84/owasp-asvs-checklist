@@ -94,7 +94,10 @@ export class GeminiAiService {
       })
     );
   }
-
+// Ajoutez cette méthode pour vider le cache côté serveur si nécessaire
+clearServerCache(): Observable<any> {
+  return this.http.post(`${this.apiUrl}/clear-cache`, {});
+}
   private checkQuota(): boolean {
     const now = Date.now();
     if (now - this.lastRequestTime > 60000) {
